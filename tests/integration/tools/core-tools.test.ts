@@ -221,6 +221,27 @@ describe('Core tool handlers', () => {
       expect(result.content[0].text).toContain('Searched')
     })
 
+    it('waits through a false completed pause before returning the full answer', async () => {
+      const partial = {
+        status: 'completed',
+        steps: [],
+        response: 'The answer stops at',
+        hasStopButton: false,
+      }
+      const complete = {
+        ...partial,
+        response: 'The answer stops at nothing. Complete evidence and conclusion.',
+      }
+      mocks.safeEvaluate
+        .mockResolvedValueOnce({ result: { value: JSON.stringify(partial) } })
+        .mockResolvedValueOnce({ result: { value: JSON.stringify(partial) } })
+        .mockResolvedValueOnce({ result: { value: JSON.stringify(partial) } })
+        .mockResolvedValue({ result: { value: JSON.stringify(complete) } })
+      const handler = getHandler('comet_wait')
+      const result = await handler({ timeout: 8000 })
+      expect(result.content[0].text).toContain('Complete evidence and conclusion')
+    }, 10000)
+
     it('returns timeout message when agent does not complete', async () => {
       const workingStatus = {
         status: 'working',

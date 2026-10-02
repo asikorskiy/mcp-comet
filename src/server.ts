@@ -681,44 +681,33 @@ export async function startServer(): Promise<void> {
         const effectiveTimeout = timeout ?? 120000
         const startTime = Date.now()
         let lastResponse = ''
-        let stallCount = 0
-        const MAX_STALL_POLLS = 10
+        let stableSince = 0
+        let lastStatus = 'idle'
+        const settleMs = Math.min(12000, Math.max(2000, effectiveTimeout / 3))
         const collectedSteps: string[] = []
 
         while (Date.now() - startTime < effectiveTimeout) {
           await sleep(config.pollInterval)
           const statusRaw = await client.safeEvaluate(buildGetAgentStatusScript(activeSelectors))
           const status = parseAgentStatus(extractValue(statusRaw))
+          lastStatus = status.status
 
           for (const step of status.steps) {
             if (!collectedSteps.includes(step)) collectedSteps.push(step)
           }
 
-          if (status.response && status.response.length > lastResponse.length) {
+          if (status.response && status.response !== lastResponse) {
             lastResponse = status.response
-            stallCount = 0
-          } else if (status.response && lastResponse.length > 0) {
-            stallCount++
+            stableSince = 0
+          } else if ((status.status === 'completed' || status.status === 'idle') && lastResponse) {
+            if (!stableSince) stableSince = Date.now()
+          } else {
+            stableSince = 0
           }
 
-          if (stallCount >= MAX_STALL_POLLS && lastResponse) break
-
-          if ((status.status === 'completed' || status.status === 'idle') && lastResponse) {
-            // Wait for response to stabilize
-            let settledResponse = lastResponse
-            for (let settle = 0; settle < 5; settle++) {
-              await sleep(1000)
-              const settledRaw = await client.safeEvaluate(
-                buildGetAgentStatusScript(activeSelectors),
-              )
-              const settledStatus = parseAgentStatus(extractValue(settledRaw))
-              const candidate = settledStatus.response || settledResponse
-              if (candidate.length <= settledResponse.length) break
-              settledResponse = candidate
-            }
-
+          if (stableSince && Date.now() - stableSince >= settleMs) {
             const parts: string[] = []
-            if (settledResponse) parts.push(settledResponse)
+            if (lastResponse) parts.push(lastResponse)
             if (collectedSteps.length > 0) {
               parts.push(`\n\nSteps:\n${collectedSteps.map((s) => `  - ${s}`).join('\n')}`)
             }
@@ -727,7 +716,11 @@ export async function startServer(): Promise<void> {
         }
 
         // Timeout
-        const timeoutParts: string[] = ['Agent is still working after timeout.']
+        const timeoutParts: string[] = [
+          lastStatus === 'completed'
+            ? 'Response not settled before timeout.'
+            : 'Agent is still working after timeout.',
+        ]
         if (collectedSteps.length > 0) {
           timeoutParts.push(`\nSteps so far:\n${collectedSteps.map((s) => `  - ${s}`).join('\n')}`)
         }

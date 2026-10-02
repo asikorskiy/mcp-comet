@@ -44,7 +44,7 @@ export function buildGetAgentStatusScript(selectors?: SelectorSet): string {
     if (results.length > 0) {
       response = results[results.length - 1];
       response = response.replace(/View All/g, '').replace(/Show more/g, '').replace(/Ask a follow-up/g, '').replace(/\\d+ sources/g, '');
-      if (response.length > 8000) response = response.substring(0, 8000);
+      if (response.length > 48000) response = response.substring(0, 48000) + String.fromCharCode(10) + "[MCP response truncated at 48000 chars]";
     }
 
     if (hasStopButton || hasLoadingSpinner) status = "working";

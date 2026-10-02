@@ -41,10 +41,11 @@ describe('buildGetAgentStatusScript', () => {
     expect(s).toContain('.custom-loading')
   })
 
-  it('truncates response at 8000 chars', () => {
+  it('labels only oversized responses instead of silently cutting at 8000 chars', () => {
     const s = buildGetAgentStatusScript()
-    expect(s).toContain('8000')
-    expect(s).toContain('substring')
+    expect(s).toContain('48000')
+    expect(s).toContain('MCP response truncated')
+    expect(s).not.toContain('substring(0, 8000)')
   })
 
   it('includes step pattern extraction', () => {

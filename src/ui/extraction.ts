@@ -66,6 +66,17 @@ export function buildExtractSourcesScript(): string {
       }
     }
 
+    // Strategy C: project answers often render plain links, not citation badges.
+    var answerAnchors = document.querySelectorAll('main [class*="prose"] a[href]');
+    for (var p = 0; p < answerAnchors.length; p++) {
+      var link = answerAnchors[p];
+      var url = link.href;
+      if (!url || seenUrls[url] || isInternalLink(url)) continue;
+      if (!url.startsWith('https://') && !url.startsWith('http://')) continue;
+      seenUrls[url] = true;
+      sources.push({ url: url, title: (link.innerText || '').trim() || extractDomain(url) || url });
+    }
+
     return JSON.stringify(sources);
   })()`
 }
