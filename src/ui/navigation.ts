@@ -20,6 +20,18 @@ const MODE_ICONS: Record<string, string> = {
   computer: '#pplx-icon-click',
 }
 
+/** Only a blank home composer can safely use the slash typeahead. */
+export function buildModePreflightScript(): string {
+  return ` (function() {
+    var input = document.querySelector('#ask-input') || document.querySelector('[contenteditable="true"]');
+    return JSON.stringify({
+      url: location.href,
+      hasInput: !!input,
+      hasDraft: !!(input && (input.innerText || input.value || '').trim())
+    });
+  })()`.trim()
+}
+
 /** Click a mode item after the caller opens the slash menu in the active composer. */
 export function buildModeSwitchScript(mode: string): string {
   const iconHref = MODE_ICONS[mode] ?? (mode ? `#pplx-icon-${mode}` : '')

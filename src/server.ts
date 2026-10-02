@@ -16,6 +16,7 @@ import {
 } from './ui/extraction.js'
 import { buildTypePromptScript } from './ui/input.js'
 import {
+  buildModePreflightScript,
   buildModeSwitchScript,
   buildReadActiveModeScript,
   buildSubmitPromptScript,
@@ -471,10 +472,30 @@ export async function startServer(): Promise<void> {
           // A mode query must not navigate or erase an unsent prompt.
           return textResult('Current mode: unknown (non-invasive read is unavailable)')
         }
-        // Navigate to home page for clean input (mode typeahead only works on new chat page)
-        await client.navigate('https://www.perplexity.ai')
-        await sleep(2000)
-        if (mode === 'standard') return textResult('Mode switch result: selected:standard')
+        // The slash UI is not project-aware. Never leave a project/conversation or erase a draft.
+        const preflightRaw = extractValue(await client.safeEvaluate(buildModePreflightScript()))
+        let preflight: { url?: string; hasInput?: boolean; hasDraft?: boolean }
+        try {
+          preflight = JSON.parse(String(preflightRaw))
+        } catch {
+          return textResult('Mode switch failed closed: browser preflight unavailable')
+        }
+        if (
+          preflight.url !== 'https://www.perplexity.ai/' &&
+          preflight.url !== 'https://www.perplexity.ai'
+        ) {
+          return textResult(
+            'Mode switch failed closed: project/conversation mode cannot be safely selected without leaving context',
+          )
+        }
+        if (!preflight.hasInput || preflight.hasDraft) {
+          return textResult('Mode switch failed closed: composer missing or unsent draft present')
+        }
+        if (mode === 'standard') {
+          return textResult(
+            'Mode switch failed closed: standard mode cannot be confirmed by the current UI',
+          )
+        }
         const MAX_MODE_RETRIES = 10
         for (let attempt = 0; attempt < MAX_MODE_RETRIES; attempt++) {
           // Lexical ignores CDP char events on some Comet versions.
@@ -486,7 +507,7 @@ export async function startServer(): Promise<void> {
           const raw = await client.safeEvaluate(buildModeSwitchScript(mode))
           const result = extractValue(raw)
           if (typeof result === 'string' && result.startsWith('clicked:')) {
-            return textResult(`Mode switch result: ${result}`)
+            return textResult(`Mode switch attempted (selection unconfirmed): ${result}`)
           }
           await sleep(300)
         }

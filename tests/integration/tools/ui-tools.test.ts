@@ -67,13 +67,60 @@ describe('UI control tool handlers', () => {
       expect(mocks.typeChar).not.toHaveBeenCalled()
     }, 15000)
 
+    it('fails closed inside a project without navigating or clearing a draft', async () => {
+      mocks.safeEvaluate.mockResolvedValue({
+        result: {
+          value: JSON.stringify({
+            url: 'https://www.perplexity.ai/projects/project-id',
+            hasInput: true,
+            hasDraft: true,
+          }),
+        },
+      })
+      const result = await getHandler('comet_mode')({ mode: 'deep-research' })
+      expect(result.content[0].text).toContain(
+        'project/conversation mode cannot be safely selected',
+      )
+      expect(mocks.navigate).not.toHaveBeenCalled()
+    })
+
+    it('fails closed on home draft or unreadable preflight', async () => {
+      mocks.safeEvaluate.mockResolvedValueOnce({
+        result: {
+          value: JSON.stringify({
+            url: 'https://www.perplexity.ai/',
+            hasInput: true,
+            hasDraft: true,
+          }),
+        },
+      })
+      expect((await getHandler('comet_mode')({ mode: 'deep-research' })).content[0].text).toContain(
+        'unsent draft',
+      )
+      mocks.safeEvaluate.mockResolvedValueOnce({ result: { value: undefined } })
+      expect((await getHandler('comet_mode')({ mode: 'deep-research' })).content[0].text).toContain(
+        'preflight unavailable',
+      )
+      expect(mocks.navigate).not.toHaveBeenCalled()
+    })
+
     it('switches mode and returns result', async () => {
+      mocks.safeEvaluate.mockResolvedValueOnce({
+        result: {
+          value: JSON.stringify({
+            url: 'https://www.perplexity.ai/',
+            hasInput: true,
+            hasDraft: false,
+          }),
+        },
+      })
       mocks.safeEvaluate.mockResolvedValue({ result: { value: 'clicked:#pplx-icon-telescope' } })
       const handler = getHandler('comet_mode')
       const result = await handler({ mode: 'deep-research' })
 
       expect(result.content[0].type).toBe('text')
-      expect(result.content[0].text).toContain('Mode switch result')
+      expect(result.content[0].text).toContain('selection unconfirmed')
+      expect(mocks.navigate).not.toHaveBeenCalled()
       expect(result.content[0].text).toContain('clicked:#pplx-icon-telescope')
     })
 
@@ -81,6 +128,15 @@ describe('UI control tool handlers', () => {
       mocks.safeEvaluate.mockReset()
       mocks.pressKey.mockClear()
       // Each retry attempt calls safeEvaluate twice (focus + mode switch)
+      mocks.safeEvaluate.mockResolvedValueOnce({
+        result: {
+          value: JSON.stringify({
+            url: 'https://www.perplexity.ai/',
+            hasInput: true,
+            hasDraft: false,
+          }),
+        },
+      })
       // Attempt 1: focus(default) + mode(no_listbox_found)
       // Attempt 2: focus(default) + mode(no_listbox_found)
       // Attempt 3: focus(default) + mode(clicked)
@@ -95,18 +151,27 @@ describe('UI control tool handlers', () => {
       const result = await handler({ mode: 'deep-research' })
 
       expect(result.content[0].text).toContain('clicked:#pplx-icon-telescope')
-      expect(mocks.safeEvaluate).toHaveBeenCalledTimes(6)
+      expect(mocks.safeEvaluate).toHaveBeenCalledTimes(7)
     }, 10000)
 
     it('returns failure after max retries when listbox never appears', async () => {
       mocks.safeEvaluate.mockReset()
+      mocks.safeEvaluate.mockResolvedValueOnce({
+        result: {
+          value: JSON.stringify({
+            url: 'https://www.perplexity.ai/',
+            hasInput: true,
+            hasDraft: false,
+          }),
+        },
+      })
       mocks.safeEvaluate.mockResolvedValue({ result: { value: 'no_listbox_found' } })
       const handler = getHandler('comet_mode')
       const result = await handler({ mode: 'deep-research' })
 
       expect(result.content[0].text).toContain('Mode switch failed')
       // 10 retries × 2 safeEvaluate calls each = 20
-      expect(mocks.safeEvaluate).toHaveBeenCalledTimes(20)
+      expect(mocks.safeEvaluate).toHaveBeenCalledTimes(21)
     }, 15000)
 
     it('returns error response when safeEvaluate fails', async () => {
