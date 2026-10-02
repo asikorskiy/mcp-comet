@@ -52,7 +52,7 @@ describe('UI control tool handlers', () => {
       expect(result.content[0].text).toContain('Current mode: computer')
     })
 
-    it('returns standard mode via typeahead fallback', async () => {
+    it('does not mutate the draft while querying an uncertain mode', async () => {
       mocks.safeEvaluate
         // 1st call: URL-based check returns 'standard' → enters typeahead flow
         .mockResolvedValueOnce({ result: { value: 'standard' } })
@@ -62,7 +62,9 @@ describe('UI control tool handlers', () => {
       const result = await handler({})
 
       expect(result.content[0].type).toBe('text')
-      expect(result.content[0].text).toContain('Current mode: standard')
+      expect(result.content[0].text).toContain('Current mode: unknown')
+      expect(mocks.navigate).not.toHaveBeenCalled()
+      expect(mocks.typeChar).not.toHaveBeenCalled()
     }, 15000)
 
     it('switches mode and returns result', async () => {

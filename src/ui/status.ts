@@ -18,8 +18,7 @@ export function buildGetAgentStatusScript(selectors?: SelectorSet): string {
       var btn = buttons[i];
       var label = (btn.getAttribute('aria-label') || '').toLowerCase();
       if (label.indexOf('stop') !== -1 || label.indexOf('cancel') !== -1) { hasStopButton = true; break; }
-      var svg = btn.querySelector('svg rect');
-      if (svg) { hasStopButton = true; break; }
+      // Unrelated SVG rectangles (e.g. Expand pane) are not stop controls.
     }
 
     var spinSelectors = ${JSON.stringify([...loadingSelectors])};
@@ -49,7 +48,6 @@ export function buildGetAgentStatusScript(selectors?: SelectorSet): string {
     }
 
     if (hasStopButton || hasLoadingSpinner) status = "working";
-    else if (hasWorkingText) status = "working";
     else if (results.length > 0) status = "completed";
 
     return JSON.stringify({ status: status, steps: steps, currentStep: currentStep, response: response, hasStopButton: hasStopButton, hasLoadingSpinner: hasLoadingSpinner, proseCount: results.length });

@@ -20,15 +20,23 @@ const MODE_ICONS: Record<string, string> = {
   computer: '#pplx-icon-click',
 }
 
-/**
- * Build script to click a mode item in the typeahead menu.
- * The caller MUST inject '/' via CDP Input API before running this script.
- * Matching is done by SVG icon href — locale-independent.
- */
+/** Click a mode item after the caller opens the slash menu in the active composer. */
 export function buildModeSwitchScript(mode: string): string {
   const iconHref = MODE_ICONS[mode] ?? (mode ? `#pplx-icon-${mode}` : '')
+  const modeLabel =
+    (
+      {
+        'deep-research': 'deep research',
+        'model-council': 'model council',
+        create: 'create',
+        learn: 'learn',
+        review: 'review',
+        computer: 'computer',
+      } as Record<string, string>
+    )[mode] ?? mode
   return `(function() {
     var iconHref = ${JSON.stringify(iconHref)};
+    var modeLabel = ${JSON.stringify(modeLabel)};
     if (!iconHref) return 'standard_mode_no_action';
 
     var listbox = document.querySelector('[role="listbox"]');
@@ -48,6 +56,11 @@ export function buildModeSwitchScript(mode: string): string {
           item.click();
           return 'clicked:' + iconHref;
         }
+      }
+      // Comet frequently changes SVG names; text labels are the fallback.
+      if ((item.textContent || '').trim().toLowerCase().includes(modeLabel)) {
+        item.click();
+        return 'clicked:' + modeLabel;
       }
     }
     return 'menu_item_not_found:' + iconHref;

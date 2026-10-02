@@ -42,7 +42,7 @@ async function ensureConnected(): Promise<void> {
   if (client.state.targetId) return
   logger.info('Auto-connecting to Comet...')
   await client.launchOrConnect()
-  await client.closeExtraTabs()
+  // Never close user tabs merely to discover or call this server.
   try {
     const { chromeMajor, selectors } = await detectCometVersion(config.port)
     activeSelectors = selectors
@@ -358,17 +358,9 @@ export async function startServer(): Promise<void> {
         const normalizedPrompt = client.normalizePrompt(prompt)
         // Handle newChat or tab management
         if (newChat) {
-          await client.closeExtraTabs()
-          await client.disconnect()
-          await client.launchOrConnect()
+          // Keep the selected target and other browser tabs intact.
           await client.navigate('https://www.perplexity.ai')
           await sleep(2000)
-        } else {
-          const cat = await client.listTabsCategorized()
-          if (cat.main.length > 0 && cat.main[0].id !== client.state.targetId) {
-            await client.disconnect()
-            await client.connect(cat.main[0].id)
-          }
         }
 
         // PRE-SEND STATE CAPTURE
@@ -476,59 +468,24 @@ export async function startServer(): Promise<void> {
             return textResult(`Current mode: ${urlMode}`)
           }
 
-          // 2. Open typeahead to read active mode from menu
-          await client.navigate('https://www.perplexity.ai')
-          await sleep(2000)
-
-          let currentMode: unknown = 'standard'
-          for (let attempt = 0; attempt < 5; attempt++) {
-            // Focus input, clear, type /
-            await client.safeEvaluate(`(function() {
-              var input = document.querySelector('#ask-input') || document.querySelector('[contenteditable="true"]');
-              if (input) input.focus();
-            })()`)
-            await client.pressKeyWithModifier('a', 4)
-            await client.pressKey('Backspace')
-            await sleep(100)
-            await client.typeChar('/')
-            await sleep(500)
-
-            const raw = await client.safeEvaluate(buildReadActiveModeScript())
-            const result = extractValue(raw)
-            if (result !== 'standard') {
-              currentMode = result
-              // Close typeahead
-              await client.pressKey('Escape')
-              break
-            }
-            await sleep(300)
-          }
-
-          // Close typeahead if still open
-          await client.pressKey('Escape')
-          return textResult(`Current mode: ${currentMode}`)
+          // A mode query must not navigate or erase an unsent prompt.
+          return textResult('Current mode: unknown (non-invasive read is unavailable)')
         }
         // Navigate to home page for clean input (mode typeahead only works on new chat page)
         await client.navigate('https://www.perplexity.ai')
         await sleep(2000)
+        if (mode === 'standard') return textResult('Mode switch result: selected:standard')
         const MAX_MODE_RETRIES = 10
         for (let attempt = 0; attempt < MAX_MODE_RETRIES; attempt++) {
-          // Focus input, clear via Cmd+A+Backspace, then type / via CDP
-          await client.safeEvaluate(`(function() {
-            var input = document.querySelector('#ask-input') || document.querySelector('[contenteditable="true"]');
-            if (input) input.focus();
-          })()`)
-          // Select all (Meta/Cmd = modifier 4) and delete
-          await client.pressKeyWithModifier('a', 4)
-          await client.pressKey('Backspace')
-          await sleep(100)
-          // Type / via char event (inserts into Lexical editor)
-          await client.typeChar('/')
+          // Lexical ignores CDP char events on some Comet versions.
+          await client.safeEvaluate(
+            `(function() { var input = document.querySelector('#ask-input') || document.querySelector('[contenteditable="true"]'); if (!input) return 'no_input_found'; input.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); document.execCommand('insertText', false, '/'); return input.innerText; })()`,
+          )
           await sleep(500)
 
           const raw = await client.safeEvaluate(buildModeSwitchScript(mode))
           const result = extractValue(raw)
-          if (result !== 'no_listbox_found' && result !== 'no_input_found') {
+          if (typeof result === 'string' && result.startsWith('clicked:')) {
             return textResult(`Mode switch result: ${result}`)
           }
           await sleep(300)

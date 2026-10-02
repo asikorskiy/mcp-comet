@@ -34,7 +34,7 @@ export function buildFindProseJS(): string {
       var el = proseElements[i];
       var parent = el.parentElement;
       var excluded = false;
-      while (parent) { if (excludeTags.indexOf(parent.tagName) !== -1) { excluded = true; break; } parent = parent.parentElement; }
+      while (parent) { if (excludeTags.indexOf(parent.tagName) !== -1 || parent.classList?.contains('prose')) { excluded = true; break; } parent = parent.parentElement; }
       if (excluded) continue;
 
       // Clone element and remove citation badges before extracting text
@@ -42,7 +42,7 @@ export function buildFindProseJS(): string {
       var citations = clone.querySelectorAll('.citation, .citation-nbsp');
       for (var c = 0; c < citations.length; c++) { citations[c].remove(); }
 
-      var text = clone.innerText ? clone.innerText.trim() : '';
+      var text = el.innerText ? el.innerText.trim() : '';
       if (!text) continue;
       var isUI = false;
       for (var u = 0; u < uiTexts.length; u++) { if (text.indexOf(uiTexts[u]) === 0) { isUI = true; break; } }

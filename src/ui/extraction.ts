@@ -5,7 +5,8 @@ export function buildExtractSourcesScript(): string {
       try {
         var hostname = new URL(url).hostname;
         // Domain check must match src/utils.ts isPerplexityDomain()
-        return hostname === 'perplexity.ai' || hostname.endsWith('.perplexity.ai');
+        var path = new URL(url).pathname;
+        return (hostname === 'perplexity.ai' || hostname.endsWith('.perplexity.ai')) && ['search', 'account', 'home', 'spaces'].some(function(segment) { return path === '/' + segment || path.startsWith('/' + segment + '/'); });
       } catch (e) {
         return true;
       }
@@ -43,10 +44,11 @@ export function buildExtractSourcesScript(): string {
     var citations = document.querySelectorAll('[class*="citation"]');
     for (var c = 0; c < citations.length; c++) {
       var el = citations[c];
-      if (el.className.indexOf('citation-nbsp') !== -1) continue;
+      if (el.className.indexOf('citation-nbsp') !== -1 || el.parentElement?.closest('[data-pplx-citation]')) continue;
       var anchor = el.closest('a') || el.querySelector('a');
-      if (anchor) {
-        var href2 = anchor.href;
+      var dataUrl = Array.from(el.attributes || []).map(function(a) { return a.value; }).find(function(v) { return v.startsWith('https://') || v.startsWith('http://'); });
+      if (anchor || dataUrl) {
+        var href2 = dataUrl || anchor.href;
         if (!href2 || seenUrls[href2]) continue;
         if (isInternalLink(href2)) continue;
         seenUrls[href2] = true;
