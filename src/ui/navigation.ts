@@ -1,11 +1,11 @@
 export function buildSubmitPromptScript(): string {
   return `(function() {
-    var active = document.activeElement;
-    if (active) {
-      active.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', bubbles: true}));
-      active.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', bubbles: true}));
-    }
-    return 'submitted';
+    var input = document.querySelector('#ask-input') || document.querySelector('[contenteditable="true"]');
+    if (!input || !(input.innerText || input.value || '').trim()) return 'empty_input';
+    var button = document.querySelector('button[aria-label="Submit"]');
+    if (!button || button.disabled) return 'submit_unavailable';
+    button.click();
+    return 'clicked_submit';
   })()`
 }
 

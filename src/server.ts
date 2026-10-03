@@ -37,6 +37,7 @@ const client = CDPClient.getInstance(config)
 
 /** Active selector set — updated after each comet_connect to match Comet's Chrome version. */
 let activeSelectors: SelectorSet = SELECTORS
+let pendingAnswerBaseline: { proseCount: number; lastProseText: string } | null = null
 
 /** Ensure the client is connected before using tools. Auto-connects if needed. */
 async function ensureConnected(): Promise<void> {
@@ -357,10 +358,12 @@ export async function startServer(): Promise<void> {
       try {
         await ensureConnected()
         const normalizedPrompt = client.normalizePrompt(prompt)
+        const fingerprint = normalizedPrompt.slice(0, 120)
         // Handle newChat or tab management
         if (newChat) {
           // Keep the selected target and other browser tabs intact.
           await client.navigate('https://www.perplexity.ai')
+          pendingAnswerBaseline = null
           await sleep(2000)
         }
 
@@ -370,6 +373,10 @@ export async function startServer(): Promise<void> {
           proseCount: number
           lastProseText: string
         }
+        const beforeRaw = await client.safeEvaluate(
+          `(function() { var text = document.body ? document.body.innerText : ''; var marker = ${JSON.stringify(fingerprint)}; return text.split(marker).length - 1; })()`,
+        )
+        const beforeCount = Number(extractValue(beforeRaw)) || 0
 
         // Type prompt
         const typeResult = await client.safeEvaluate(
@@ -382,10 +389,37 @@ export async function startServer(): Promise<void> {
 
         // Submit
         const submitResult = await client.safeEvaluate(buildSubmitPromptScript())
-        logger.debug('Submit result:', extractValue(submitResult))
+        const submitted = extractValue(submitResult)
+        logger.debug('Submit result:', submitted)
+        if (submitted !== 'clicked_submit') {
+          return textResult(
+            `Prompt not submitted: ${String(submitted)}. Inspect the composer before retrying.`,
+          )
+        }
+
+        const confirmScript = `(function() {
+          var marker = ${JSON.stringify(fingerprint)};
+          var text = document.body ? document.body.innerText : '';
+          var input = document.querySelector('#ask-input') || document.querySelector('[contenteditable="true"]');
+          return JSON.stringify({ count: text.split(marker).length - 1, draft: input ? (input.innerText || input.value || '') : '' });
+        })()`
+        for (let attempt = 0; attempt < 8; attempt++) {
+          await sleep(450)
+          const confirmRaw = await client.safeEvaluate(confirmScript)
+          const state = JSON.parse(String(extractValue(confirmRaw))) as {
+            count: number
+            draft: string
+          }
+          if (state.count > beforeCount && !state.draft.includes(fingerprint)) {
+            pendingAnswerBaseline = _preSendState
+            return textResult(
+              'Prompt submitted successfully. Use comet_poll to track status or comet_wait to block until completion.',
+            )
+          }
+        }
 
         return textResult(
-          'Prompt submitted successfully. Use comet_poll to track status or comet_wait to block until completion.',
+          'Prompt submission unconfirmed. Inspect the conversation before retrying.',
         )
       } catch (err) {
         return toMcpError(err)
@@ -403,6 +437,16 @@ export async function startServer(): Promise<void> {
         await ensureConnected()
         const raw = await client.safeEvaluate(buildGetAgentStatusScript(activeSelectors))
         const status = parseAgentStatus(extractValue(raw))
+        if (
+          pendingAnswerBaseline &&
+          status.response &&
+          status.proseCount !== undefined &&
+          status.proseCount <= pendingAnswerBaseline.proseCount
+        ) {
+          status.status = 'working'
+          status.currentStep = 'Waiting for this question to receive an answer'
+          status.response = ''
+        }
         return textResult(JSON.stringify(status, null, 2))
       } catch (err) {
         return toMcpError(err)
@@ -666,6 +710,7 @@ export async function startServer(): Promise<void> {
           )
         }
         await client.navigate(url)
+        pendingAnswerBaseline = null
         return textResult(`Navigated to: ${url}`)
       } catch (err) {
         return toMcpError(err)
@@ -711,6 +756,16 @@ export async function startServer(): Promise<void> {
           await sleep(config.pollInterval)
           const statusRaw = await client.safeEvaluate(buildGetAgentStatusScript(activeSelectors))
           const status = parseAgentStatus(extractValue(statusRaw))
+          if (
+            pendingAnswerBaseline &&
+            status.response &&
+            status.proseCount !== undefined &&
+            status.proseCount <= pendingAnswerBaseline.proseCount
+          ) {
+            lastStatus = 'working'
+            stableSince = 0
+            continue
+          }
           lastStatus = status.status
 
           for (const step of status.steps) {

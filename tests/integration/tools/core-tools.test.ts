@@ -138,19 +138,55 @@ describe('Core tool handlers', () => {
   // ---------------------------------------------------------------------------
 
   describe('comet_ask', () => {
-    it('returns immediate submission message without polling', async () => {
-      let _callCount = 0
-      mocks.safeEvaluate.mockImplementation(async () => {
-        _callCount++
-        return { result: { value: '{"proseCount":0,"lastProseText":""}' } }
-      })
-
+    it('confirms the question appears before claiming submission', async () => {
+      let callCount = 0
+      const values = [
+        '{"proseCount":0,"lastProseText":""}',
+        0,
+        'contenteditable:#ask-input',
+        'clicked_submit',
+        '{"count":1,"draft":""}',
+      ]
+      mocks.safeEvaluate.mockImplementation(async () => ({
+        result: { value: values[callCount++] },
+      }))
       const handler = getHandler('comet_ask')
       const result = await handler({ prompt: 'test' })
-
       expect(result.content[0].text).toContain('Prompt submitted successfully')
       expect(result.content[0].text).toContain('comet_poll')
+      expect(callCount).toBe(5)
     })
+
+    it('does not claim success when the submit button is unavailable', async () => {
+      let callCount = 0
+      const values = [
+        '{"proseCount":0,"lastProseText":""}',
+        0,
+        'contenteditable:#ask-input',
+        'submit_unavailable',
+      ]
+      mocks.safeEvaluate.mockImplementation(async () => ({
+        result: { value: values[callCount++] },
+      }))
+      const result = await getHandler('comet_ask')({ prompt: 'test' })
+      expect(result.content[0].text).toContain('Prompt not submitted: submit_unavailable')
+    })
+
+    it('does not claim success when clicked submit never appears in the conversation', async () => {
+      let callCount = 0
+      const values = [
+        '{"proseCount":0,"lastProseText":""}',
+        0,
+        'contenteditable:#ask-input',
+        'clicked_submit',
+      ]
+      mocks.safeEvaluate.mockImplementation(async () => ({
+        result: { value: values[callCount++] ?? '{"count":0,"draft":""}' },
+      }))
+      const result = await getHandler('comet_ask')({ prompt: 'test' })
+      expect(result.content[0].text).toContain('Prompt submission unconfirmed')
+      expect(result.content[0].text).not.toContain('submitted successfully')
+    }, 10000)
 
     it('error handling — returns MCP error when safeEvaluate throws', async () => {
       mocks.safeEvaluate.mockRejectedValue(new Error('Script error'))
@@ -201,6 +237,36 @@ describe('Core tool handlers', () => {
   // ---------------------------------------------------------------------------
 
   describe('comet_wait', () => {
+    it('ignores the previous completed answer until this question has new prose', async () => {
+      let askCall = 0
+      const askValues = [
+        '{"proseCount":1,"lastProseText":"old answer"}',
+        0,
+        'contenteditable:#ask-input',
+        'clicked_submit',
+        '{"count":1,"draft":""}',
+      ]
+      mocks.safeEvaluate.mockImplementation(async () => ({
+        result: { value: askValues[askCall++] },
+      }))
+      await getHandler('comet_ask')({ prompt: 'new question' })
+      const old = {
+        status: 'completed',
+        steps: [],
+        response: 'old answer',
+        proseCount: 1,
+        hasStopButton: false,
+      }
+      const fresh = { ...old, response: 'new answer with evidence', proseCount: 2 }
+      let waitCall = 0
+      mocks.safeEvaluate.mockImplementation(async () => ({
+        result: { value: JSON.stringify(waitCall++ < 3 ? old : fresh) },
+      }))
+      const result = await getHandler('comet_wait')({ timeout: 8000 })
+      expect(result.content[0].text).toContain('new answer with evidence')
+      expect(result.content[0].text).not.toContain('old answer')
+    }, 10000)
+
     it('returns response when agent completes', async () => {
       const completedStatus = {
         status: 'completed',

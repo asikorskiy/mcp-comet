@@ -7,9 +7,34 @@ import {
 } from '../../../src/ui/navigation.js'
 
 describe('buildSubmitPromptScript', () => {
-  it('generates multi-strategy submit', () => {
-    const s = buildSubmitPromptScript()
-    expect(s).toContain('Enter')
+  it('clicks an enabled submit button instead of a synthetic Enter', () => {
+    const script = buildSubmitPromptScript()
+    expect(script).toContain('aria-label="Submit"')
+    expect(script).not.toContain('KeyboardEvent')
+    let clicked = false
+    const doc = {
+      querySelector: (selector: string) =>
+        selector === '#ask-input'
+          ? { innerText: 'A question' }
+          : selector.includes('Submit')
+            ? {
+                disabled: false,
+                click: () => {
+                  clicked = true
+                },
+              }
+            : null,
+    }
+    const result = Function('document', `return ${script}`)(doc)
+    expect(result).toBe('clicked_submit')
+    expect(clicked).toBe(true)
+  })
+
+  it('fails closed on an empty composer', () => {
+    const doc = {
+      querySelector: (selector: string) => (selector === '#ask-input' ? { innerText: '' } : null),
+    }
+    expect(Function('document', `return ${buildSubmitPromptScript()}`)(doc)).toBe('empty_input')
   })
 })
 
