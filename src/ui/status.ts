@@ -56,13 +56,21 @@ export function buildGetAgentStatusScript(
       for (var t = 0; t < turns.length; t++) {
         var turn = turns[t];
         // Answer renderers contain prose; question renderers do not.
-        if (turn.querySelector('[class*="prose"]')) continue;
+        if (turn.matches('[class*="prose"]') || turn.querySelector('[class*="prose"]')) continue;
         latestQuestion = turn;
-        if (normalize(turn.innerText) === normalize(question)) anchor = turn;
+        // Rich-text rendering changes links and spacing; require a unique, long literal
+        // prefix of the submitted prompt rather than full rendered-text equality.
+        var submitted = normalize(question);
+        var rendered = normalize(turn.innerText);
+        var prefix = submitted.slice(0, Math.min(64, submitted.length));
+        if (rendered === submitted || (prefix.length >= 48 && rendered.indexOf(prefix) === 0)) {
+          if (anchor) { bindingError = 'Ambiguous submitted question prefix'; }
+          anchor = turn;
+        }
       }
-      if (!anchor || anchor !== latestQuestion) {
+      if (bindingError || !anchor || anchor !== latestQuestion) {
         answerIndex = -1;
-        bindingError = 'Submitted question not found as latest conversation turn';
+        bindingError = bindingError || 'Submitted question not found as latest conversation turn';
       } else {
         answerIndex = -1;
         for (var a = 0; a < resultElements.length; a++) {
