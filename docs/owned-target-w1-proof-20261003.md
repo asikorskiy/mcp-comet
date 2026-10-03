@@ -17,3 +17,10 @@ Scope: read-only Comet CDP verification after owner-research browser lease relea
 
 ## Result
 Isolation and target ownership: passed. Artifact conversation/title/source-bearing page read: passed. Exact full artifact extraction: partial — Comet exposes a mixed visible page body, while the local baseline is a comparison rather than a DOM selector contract. Smallest safe next step is selector discovery/validation against a non-project answer container; do not mutate this project conversation or its settings.
+
+## Scoped artifact completion — 2026-10-04
+- A later fresh owned target FF8135F125AC2BBC3E20B4B49C829F6A again preserved every pre-existing target URL (before/after invariant true) and was the only target navigated to W1.
+- The scoped main element, rather than document.body, produced the artifact dialogue: title matched W1; totalCharacters=4925, returnedCharacters=4925, truncated=false. Its head begins with the W1 prompt and its tail ends with the cited answer/source portion; the live command emitted both values.
+- main-scoped public load-bearing source URLs: Digiday OpenAI click-to-chat; Digiday retail-media talent; Digiday Google publisher licensing; Digiday Reuters paywall; Meta One; OpenAI model-misalignment framework; RBC economy; Pew news censorship; IAB ad-spend forecast.
+- Mode safety read: W1 URL and 28,439-character page body were identical before/after mode preflight; input existed and draft was empty. The preflight URL is a conversation, so comet_mode with a requested mode returns its explicit fail-closed project/conversation result before any slash UI, home navigation, or input mutation.
+- No project instruction, setting, attachment, conversation, schedule, sharing, backend, existing tab, or draft was altered.
