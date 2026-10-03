@@ -2,7 +2,10 @@ import { buildFindProseJS } from '../prose-filter.js'
 import type { SelectorSet } from '../selectors/types.js'
 import { SELECTORS } from './selectors.js'
 
-export function buildGetAgentStatusScript(selectors?: SelectorSet): string {
+export function buildGetAgentStatusScript(
+  selectors?: SelectorSet,
+  pendingQuestion?: string,
+): string {
   const loadingSelectors = selectors?.LOADING ?? SELECTORS.LOADING
   const findProseBody = buildFindProseJS()
   return `(function() {
@@ -41,15 +44,42 @@ export function buildGetAgentStatusScript(selectors?: SelectorSet): string {
     }
 
     ${findProseBody}
-    if (results.length > 0) {
-      response = results[results.length - 1];
+    var bindingError = '';
+    var answerIndex = results.length - 1;
+    var question = ${JSON.stringify(pendingQuestion ?? '')};
+    if (question) {
+      // biome-ignore lint/suspicious/noUselessEscapeInString: escape survives the generated browser script
+      var normalize = function(text) { return (text || '').replace(/\s+/g, ' ').trim(); };
+      var turns = document.querySelectorAll('main [data-renderer="lm"]');
+      var anchor = null;
+      var latestQuestion = null;
+      for (var t = 0; t < turns.length; t++) {
+        var turn = turns[t];
+        // Answer renderers contain prose; question renderers do not.
+        if (turn.querySelector('[class*="prose"]')) continue;
+        latestQuestion = turn;
+        if (normalize(turn.innerText) === normalize(question)) anchor = turn;
+      }
+      if (!anchor || anchor !== latestQuestion) {
+        answerIndex = -1;
+        bindingError = 'Submitted question not found as latest conversation turn';
+      } else {
+        answerIndex = -1;
+        for (var a = 0; a < resultElements.length; a++) {
+          var owner = resultElements[a].closest('[data-renderer="lm"]');
+          if (owner && owner !== anchor && (anchor.compareDocumentPosition(owner) & 4)) answerIndex = a;
+        }
+      }
+    }
+    if (answerIndex >= 0) {
+      response = results[answerIndex];
       response = response.replace(/View All/g, '').replace(/Show more/g, '').replace(/Ask a follow-up/g, '').replace(/\\d+ sources/g, '');
       if (response.length > 48000) response = response.substring(0, 48000) + String.fromCharCode(10) + "[MCP response truncated at 48000 chars]";
     }
 
     if (hasStopButton || hasLoadingSpinner) status = "working";
-    else if (results.length > 0) status = "completed";
+    else if (answerIndex >= 0) status = "completed";
 
-    return JSON.stringify({ status: status, steps: steps, currentStep: currentStep, response: response, hasStopButton: hasStopButton, hasLoadingSpinner: hasLoadingSpinner, proseCount: results.length });
+    return JSON.stringify({ status: status, steps: steps, currentStep: currentStep, response: response, hasStopButton: hasStopButton, hasLoadingSpinner: hasLoadingSpinner, proseCount: results.length, bindingError: bindingError });
   })()`
 }

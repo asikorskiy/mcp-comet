@@ -30,6 +30,7 @@ export function buildFindProseJS(): string {
     var excludeTags = ['NAV', 'ASIDE', 'HEADER', 'FOOTER', 'FORM'];
     var uiTexts = ['Library', 'Discover', 'Spaces', 'Finance', 'Account', 'Upgrade', 'Home', 'Search', 'Ask a follow-up', 'Follow-ups', 'sources'];
     var results = [];
+    var resultElements = [];
     for (var i = 0; i < proseElements.length; i++) {
       var el = proseElements[i];
       var parent = el.parentElement;
@@ -49,6 +50,7 @@ export function buildFindProseJS(): string {
       if (isUI) continue;
       if (text.length < 100 && text.indexOf('?') === text.length - 1) continue;
       results.push(text);
+      resultElements.push(el);
     }
     results`
 }

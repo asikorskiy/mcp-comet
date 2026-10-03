@@ -5,7 +5,6 @@ import { CDPClient } from './cdp/client.js'
 import { loadConfig } from './config.js'
 import { EvaluationError, toMcpError } from './errors.js'
 import { createLogger } from './logger.js'
-import { buildPreSendStateScript } from './prose-filter.js'
 import type { SelectorSet } from './selectors/types.js'
 import type { CategorizedTabs, TabInfo } from './types.js'
 import { buildListConversationsScript } from './ui/conversations.js'
@@ -37,7 +36,7 @@ const client = CDPClient.getInstance(config)
 
 /** Active selector set — updated after each comet_connect to match Comet's Chrome version. */
 let activeSelectors: SelectorSet = SELECTORS
-let pendingAnswerBaseline: { proseCount: number; lastProseText: string } | null = null
+let pendingQuestion: string | null = null
 
 /** Ensure the client is connected before using tools. Auto-connects if needed. */
 async function ensureConnected(): Promise<void> {
@@ -251,6 +250,7 @@ interface RawAgentStatus {
   hasStopButton: boolean
   hasLoadingSpinner?: boolean
   proseCount?: number
+  bindingError?: string
 }
 
 function parseAgentStatus(raw: unknown): RawAgentStatus {
@@ -265,6 +265,7 @@ function parseAgentStatus(raw: unknown): RawAgentStatus {
         response: '',
         hasStopButton: false,
         proseCount: 0,
+        bindingError: 'Browser status script returned invalid JSON',
       }
     }
   }
@@ -363,16 +364,10 @@ export async function startServer(): Promise<void> {
         if (newChat) {
           // Keep the selected target and other browser tabs intact.
           await client.navigate('https://www.perplexity.ai')
-          pendingAnswerBaseline = null
+          pendingQuestion = null
           await sleep(2000)
         }
 
-        // PRE-SEND STATE CAPTURE
-        const preSendRaw = await client.safeEvaluate(buildPreSendStateScript())
-        const _preSendState = JSON.parse(String(extractValue(preSendRaw))) as {
-          proseCount: number
-          lastProseText: string
-        }
         const beforeRaw = await client.safeEvaluate(
           `(function() { var text = document.body ? document.body.innerText : ''; var marker = ${JSON.stringify(fingerprint)}; return text.split(marker).length - 1; })()`,
         )
@@ -411,7 +406,7 @@ export async function startServer(): Promise<void> {
             draft: string
           }
           if (state.count > beforeCount && !state.draft.includes(fingerprint)) {
-            pendingAnswerBaseline = _preSendState
+            pendingQuestion = normalizedPrompt
             return textResult(
               'Prompt submitted successfully. Use comet_poll to track status or comet_wait to block until completion.',
             )
@@ -435,17 +430,14 @@ export async function startServer(): Promise<void> {
     async () => {
       try {
         await ensureConnected()
-        const raw = await client.safeEvaluate(buildGetAgentStatusScript(activeSelectors))
+        const raw = await client.safeEvaluate(
+          buildGetAgentStatusScript(activeSelectors, pendingQuestion ?? undefined),
+        )
         const status = parseAgentStatus(extractValue(raw))
-        if (
-          pendingAnswerBaseline &&
-          status.response &&
-          status.proseCount !== undefined &&
-          status.proseCount <= pendingAnswerBaseline.proseCount
-        ) {
+        if (pendingQuestion && !status.response) {
           status.status = 'working'
-          status.currentStep = 'Waiting for this question to receive an answer'
-          status.response = ''
+          status.currentStep =
+            status.bindingError || 'Waiting for this question to receive an answer'
         }
         return textResult(JSON.stringify(status, null, 2))
       } catch (err) {
@@ -710,7 +702,7 @@ export async function startServer(): Promise<void> {
           )
         }
         await client.navigate(url)
-        pendingAnswerBaseline = null
+        pendingQuestion = null
         return textResult(`Navigated to: ${url}`)
       } catch (err) {
         return toMcpError(err)
@@ -754,15 +746,12 @@ export async function startServer(): Promise<void> {
 
         while (Date.now() - startTime < effectiveTimeout) {
           await sleep(config.pollInterval)
-          const statusRaw = await client.safeEvaluate(buildGetAgentStatusScript(activeSelectors))
+          const statusRaw = await client.safeEvaluate(
+            buildGetAgentStatusScript(activeSelectors, pendingQuestion ?? undefined),
+          )
           const status = parseAgentStatus(extractValue(statusRaw))
-          if (
-            pendingAnswerBaseline &&
-            status.response &&
-            status.proseCount !== undefined &&
-            status.proseCount <= pendingAnswerBaseline.proseCount
-          ) {
-            lastStatus = 'working'
+          if (pendingQuestion && !status.response) {
+            lastStatus = status.bindingError || 'Waiting for this question to receive an answer'
             stableSince = 0
             continue
           }
@@ -797,6 +786,9 @@ export async function startServer(): Promise<void> {
             ? 'Response not settled before timeout.'
             : 'Agent is still working after timeout.',
         ]
+        if (lastStatus !== 'working' && lastStatus !== 'completed' && lastStatus !== 'idle') {
+          timeoutParts.push(`Binding diagnostic: ${lastStatus}`)
+        }
         if (collectedSteps.length > 0) {
           timeoutParts.push(`\nSteps so far:\n${collectedSteps.map((s) => `  - ${s}`).join('\n')}`)
         }

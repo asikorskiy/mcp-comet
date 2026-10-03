@@ -140,13 +140,7 @@ describe('Core tool handlers', () => {
   describe('comet_ask', () => {
     it('confirms the question appears before claiming submission', async () => {
       let callCount = 0
-      const values = [
-        '{"proseCount":0,"lastProseText":""}',
-        0,
-        'contenteditable:#ask-input',
-        'clicked_submit',
-        '{"count":1,"draft":""}',
-      ]
+      const values = [0, 'contenteditable:#ask-input', 'clicked_submit', '{"count":1,"draft":""}']
       mocks.safeEvaluate.mockImplementation(async () => ({
         result: { value: values[callCount++] },
       }))
@@ -154,17 +148,12 @@ describe('Core tool handlers', () => {
       const result = await handler({ prompt: 'test' })
       expect(result.content[0].text).toContain('Prompt submitted successfully')
       expect(result.content[0].text).toContain('comet_poll')
-      expect(callCount).toBe(5)
+      expect(callCount).toBe(4)
     })
 
     it('does not claim success when the submit button is unavailable', async () => {
       let callCount = 0
-      const values = [
-        '{"proseCount":0,"lastProseText":""}',
-        0,
-        'contenteditable:#ask-input',
-        'submit_unavailable',
-      ]
+      const values = [0, 'contenteditable:#ask-input', 'submit_unavailable']
       mocks.safeEvaluate.mockImplementation(async () => ({
         result: { value: values[callCount++] },
       }))
@@ -174,12 +163,7 @@ describe('Core tool handlers', () => {
 
     it('does not claim success when clicked submit never appears in the conversation', async () => {
       let callCount = 0
-      const values = [
-        '{"proseCount":0,"lastProseText":""}',
-        0,
-        'contenteditable:#ask-input',
-        'clicked_submit',
-      ]
+      const values = [0, 'contenteditable:#ask-input', 'clicked_submit']
       mocks.safeEvaluate.mockImplementation(async () => ({
         result: { value: values[callCount++] ?? '{"count":0,"draft":""}' },
       }))
@@ -218,7 +202,7 @@ describe('Core tool handlers', () => {
   })
 
   describe('parseAgentStatus handles malformed JSON', () => {
-    it('comet_poll returns idle status for malformed JSON string', async () => {
+    it('comet_poll fails closed on malformed JSON when a question is pending', async () => {
       mocks.safeEvaluate.mockResolvedValue({
         result: { value: 'not-valid-json{{{}}}' },
       })
@@ -228,7 +212,9 @@ describe('Core tool handlers', () => {
 
       expect(result.isError).toBeUndefined()
       const parsed = JSON.parse(result.content[0].text)
-      expect(parsed.status).toBe('idle')
+      expect(parsed.status).toBe('working')
+      expect(parsed.currentStep).toContain('invalid JSON')
+      expect(parsed.response).toBe('')
     })
   })
 
