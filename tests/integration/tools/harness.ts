@@ -21,6 +21,12 @@ export const mocks = {
   disconnect: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   connect: vi.fn<(id?: string) => Promise<string>>().mockResolvedValue('target-1'),
   navigate: vi.fn<(url: string) => Promise<void>>().mockResolvedValue(undefined),
+  createOwnedTarget: vi
+    .fn<() => Promise<{ targetId: string; originalTargets: any[] }>>()
+    .mockResolvedValue({ targetId: 'owned-1', originalTargets: [] }),
+  navigateOwnedTarget: vi
+    .fn<(targetId: string, url: string) => Promise<void>>()
+    .mockResolvedValue(undefined),
   screenshot: vi.fn<(fmt?: string) => Promise<string>>().mockResolvedValue('base64data'),
   safeEvaluate: vi
     .fn<(expr: string) => Promise<{ result?: { value?: unknown }; exceptionDetails?: unknown }>>()
@@ -53,6 +59,7 @@ export const mocks = {
     connected: true,
     port: 9222,
     targetId: 'target-1',
+    ownedTargetId: null as string | null,
     reconnectAttempts: 0,
     isReconnecting: false,
   },
@@ -61,7 +68,7 @@ export const mocks = {
 // Reset all mocks and captured handlers between tests
 export function resetHarness(): void {
   Object.values(mocks).forEach((m) => {
-    if (typeof m === 'object' && m !== mocks.state) {
+    if ((typeof m === 'object' || typeof m === 'function') && m !== mocks.state) {
       // Don't reset state
       if ('mockClear' in m) (m as any).mockClear()
     }
@@ -72,6 +79,8 @@ export function resetHarness(): void {
   mocks.disconnect.mockResolvedValue(undefined)
   mocks.connect.mockResolvedValue('target-1')
   mocks.navigate.mockResolvedValue(undefined)
+  mocks.createOwnedTarget.mockResolvedValue({ targetId: 'owned-1', originalTargets: [] })
+  mocks.navigateOwnedTarget.mockResolvedValue(undefined)
   mocks.screenshot.mockResolvedValue('base64data')
   mocks.safeEvaluate.mockResolvedValue({ result: { value: '{}' } })
   mocks.listTargets.mockResolvedValue([
@@ -87,6 +96,7 @@ export function resetHarness(): void {
   mocks.state.connected = true
   mocks.state.port = 9222
   mocks.state.targetId = 'target-1'
+  mocks.state.ownedTargetId = null
 }
 
 // ---------------------------------------------------------------------------

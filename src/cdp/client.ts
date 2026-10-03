@@ -17,6 +17,7 @@ export class CDPClient {
     connected: false,
     port: 9222,
     targetId: null as string | null,
+    ownedTargetId: null as string | null,
     reconnectAttempts: 0,
     isReconnecting: false,
   }
@@ -146,6 +147,76 @@ export class CDPClient {
 
   async disconnect(): Promise<void> {
     return this.enqueue(() => this.disconnectDirect())
+  }
+
+  /** Create and attach an explicitly MCP-owned background page without touching existing tabs. */
+  async createOwnedTarget(): Promise<{ targetId: string; originalTargets: TabInfo[] }> {
+    return this.enqueue(async () => {
+      const originalTargets = await this.listTargets()
+      const originalById = new Map(originalTargets.map((target) => [target.id, target.url]))
+      const version = await this.getVersion()
+      const browserWebSocketUrl = version.webSocketDebuggerUrl
+      if (!browserWebSocketUrl) {
+        throw new CDPConnectionError(
+          'Browser-level CDP endpoint unavailable; cannot create owned target safely',
+        )
+      }
+
+      let browserClient: Client | null = null
+      try {
+        browserClient = await CRI({ target: browserWebSocketUrl, port: this.state.port })
+        const created = await browserClient.Target.createTarget({
+          url: 'about:blank',
+          background: true,
+        })
+        const targetId = created.targetId
+        const afterTargets = await this.listTargets()
+        const createdTarget = afterTargets.find((target) => target.id === targetId)
+        const originalsUnchanged = [...originalById].every(
+          ([id, url]) => afterTargets.find((target) => target.id === id)?.url === url,
+        )
+        if (!createdTarget || createdTarget.type !== 'page' || !originalsUnchanged) {
+          throw new CDPConnectionError(
+            'Owned target verification failed; existing tabs were not modified or the new target is unavailable',
+          )
+        }
+
+        await this.disconnectDirect()
+        await this.connect(targetId)
+        this.state.ownedTargetId = targetId
+        return { targetId, originalTargets }
+      } finally {
+        if (browserClient) await browserClient.close().catch(() => undefined)
+      }
+    })
+  }
+
+  /** Navigate only an explicitly MCP-owned target; never fall back to another tab. */
+  async navigateOwnedTarget(targetId: string, url: string): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.state.ownedTargetId !== targetId) {
+        throw new CDPConnectionError(
+          'Target is not owned by this MCP session; refusing to navigate',
+        )
+      }
+      const targets = await this.listTargets()
+      if (!targets.some((target) => target.id === targetId && target.type === 'page')) {
+        throw new CDPConnectionError(
+          'Owned target no longer exists; refusing to fall back to another tab',
+        )
+      }
+      if (this.state.targetId !== targetId) {
+        await this.disconnectDirect()
+        await this.connect(targetId)
+        this.state.ownedTargetId = targetId
+      }
+      await this.withAutoReconnect(async () => {
+        if (!this.criClient) throw new CDPConnectionError('Owned target is not connected')
+        await this.criClient.Page.enable()
+        await this.criClient.Page.navigate({ url })
+        await this.criClient.Page.loadEventFired()
+      })
+    })
   }
 
   async navigate(url: string): Promise<void> {
@@ -283,8 +354,12 @@ export class CDPClient {
     this.state.isReconnecting = true
     this.reconnectPromise = (async () => {
       try {
+        const targetId = this.state.targetId
+        const ownedTargetId = this.state.ownedTargetId
         await this.disconnectDirect()
-        await this.connect(this.state.targetId ?? undefined)
+        if (!targetId) throw new CDPConnectionError('No target available for reconnect')
+        await this.connect(targetId)
+        if (ownedTargetId === targetId) this.state.ownedTargetId = targetId
         this.state.reconnectAttempts = 0
         this.logger.info('Reconnected')
       } catch (err) {

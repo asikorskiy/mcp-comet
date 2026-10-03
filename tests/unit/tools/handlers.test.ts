@@ -17,9 +17,9 @@ vi.mock('../../../src/logger.js', () => ({
 }))
 
 describe('toolDefinitions', () => {
-  it('has 13 tools with correct names', async () => {
+  it('has 15 tools with correct names', async () => {
     const { toolDefinitions } = await import('../../../src/server.js')
-    expect(toolDefinitions).toHaveLength(13)
+    expect(toolDefinitions).toHaveLength(15)
     const names = toolDefinitions.map((t) => t.name)
     expect(names).toContain('comet_connect')
     expect(names).toContain('comet_ask')
@@ -32,6 +32,8 @@ describe('toolDefinitions', () => {
     expect(names).toContain('comet_get_sources')
     expect(names).toContain('comet_list_conversations')
     expect(names).toContain('comet_open_conversation')
+    expect(names).toContain('comet_create_owned_target')
+    expect(names).toContain('comet_open_owned_conversation')
     expect(names).toContain('comet_get_page_content')
     expect(names).toContain('comet_wait')
   })

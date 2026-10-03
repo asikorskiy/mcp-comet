@@ -142,6 +142,10 @@ const switchTabShape = {
   title: z.string().optional().describe('Substring of the tab title to switch to'),
 }
 const openConversationShape = { url: z.string().describe('Full URL of the conversation to open') }
+const openOwnedConversationShape = {
+  targetId: z.string().describe('Exact target ID returned by comet_create_owned_target'),
+  url: z.string().describe('Full Perplexity conversation URL to open only in the owned target'),
+}
 const getPageContentShape = {
   maxLength: z.number().optional().describe('Maximum characters of page text to extract'),
 }
@@ -203,6 +207,18 @@ export const toolDefinitions: ToolDef[] = [
     name: 'comet_list_conversations',
     description: 'List recent conversation links visible on the page.',
     inputSchema: buildInputSchema({}),
+  },
+  {
+    name: 'comet_create_owned_target',
+    description:
+      'Create and bind an explicit background MCP-owned tab without navigating, activating, closing, or reusing existing tabs. Fails closed if browser-level CDP ownership verification is unavailable.',
+    inputSchema: buildInputSchema({}),
+  },
+  {
+    name: 'comet_open_owned_conversation',
+    description:
+      'Open a Perplexity conversation only in the exact target returned by comet_create_owned_target. Refuses non-owned, missing, or ambiguous targets.',
+    inputSchema: buildInputSchema(openOwnedConversationShape),
   },
   {
     name: 'comet_open_conversation',
@@ -682,7 +698,57 @@ export async function startServer(): Promise<void> {
     },
   )
 
-  // 11. comet_open_conversation
+  // 11. comet_create_owned_target
+  server.tool(
+    'comet_create_owned_target',
+    'Create and bind an explicit background MCP-owned tab without modifying existing tabs.',
+    {},
+    async () => {
+      try {
+        const result = await client.createOwnedTarget()
+        const originals = result.originalTargets
+          .map((target) => `${target.id} ${target.url}`)
+          .join('\n')
+        return textResult(
+          'Owned target created and bound: ' +
+            result.targetId +
+            ' (background=true). Existing target URLs verified unchanged:\n' +
+            originals,
+        )
+      } catch (err) {
+        return toMcpError(err)
+      }
+    },
+  )
+
+  // 12. comet_open_owned_conversation
+  server.tool(
+    'comet_open_owned_conversation',
+    'Open a Perplexity conversation only in the exact target returned by comet_create_owned_target.',
+    openOwnedConversationShape,
+    async ({ targetId, url }) => {
+      try {
+        let parsed: URL
+        try {
+          parsed = new URL(url)
+        } catch {
+          return toMcpError(new Error(`Invalid URL: "${url}"`))
+        }
+        if (parsed.protocol !== 'https:' || !isPerplexityDomain(parsed.hostname)) {
+          return toMcpError(
+            new Error(`Invalid URL: must be a https://perplexity.ai/ URL, got "${url}"`),
+          )
+        }
+        await client.navigateOwnedTarget(targetId, url)
+        pendingQuestion = null
+        return textResult(`Navigated owned target [${targetId}] to: ${url}`)
+      } catch (err) {
+        return toMcpError(err)
+      }
+    },
+  )
+
+  // 13. comet_open_conversation
   server.tool(
     'comet_open_conversation',
     'Navigate to a specific conversation URL.',
