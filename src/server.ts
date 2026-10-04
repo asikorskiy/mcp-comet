@@ -5,6 +5,18 @@ import { CDPClient } from './cdp/client.js'
 import { loadConfig } from './config.js'
 import { EvaluationError, toMcpError } from './errors.js'
 import { createLogger } from './logger.js'
+import {
+  type BindingContext,
+  clearPendingBinding,
+  loadPendingBinding,
+  PENDING_BINDING_SCHEMA,
+  type PendingBindingRecord,
+  questionAnchor,
+  resolveBindingContext,
+  type SaveResult,
+  SERVER_EPOCH,
+  savePendingBinding,
+} from './pending-binding.js'
 import type { SelectorSet } from './selectors/types.js'
 import type { CategorizedTabs, TabInfo } from './types.js'
 import { buildListConversationsScript } from './ui/conversations.js'
@@ -15,10 +27,14 @@ import {
 } from './ui/extraction.js'
 import { buildTypePromptScript } from './ui/input.js'
 import {
+  buildModeChipClickScript,
+  buildModeChipScript,
+  buildModeMenuItemClickScript,
+  buildModeMenuItemScript,
   buildModePreflightScript,
-  buildModeSwitchScript,
   buildReadActiveModeScript,
   buildSubmitPromptScript,
+  chipLabelToMode,
 } from './ui/navigation.js'
 import { SELECTORS } from './ui/selectors.js'
 import { buildGetAgentStatusScript } from './ui/status.js'
@@ -292,6 +308,68 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function bindingLostStatus(diagnostic: string): RawAgentStatus {
+  return {
+    status: 'binding_lost',
+    steps: [],
+    currentStep: diagnostic,
+    response: '',
+    hasStopButton: false,
+    hasLoadingSpinner: false,
+    proseCount: 0,
+    bindingError: diagnostic,
+  }
+}
+
+function restartLostDiagnostic(
+  reason: BindingContext['restartReason'],
+  record: PendingBindingRecord | null,
+): string {
+  if (reason === 'url_mismatch') {
+    return `Rebind failed after server restart: tab URL changed (expected ${record?.url ?? 'unknown'})`
+  }
+  return 'Rebind failed after server restart: recorded tab URL unavailable for validation'
+}
+
+/** Current URL of the connected tab, or null when it cannot be captured. */
+async function currentTargetUrl(): Promise<string | null> {
+  try {
+    const targets = await client.listTargets()
+    const current = targets.find((t) => t.id === client.state.targetId)
+    return typeof current?.url === 'string' && current.url ? current.url : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Persist the pending-question binding next to the in-memory one so a later
+ * server process can detect the restart and either rebind with validation or
+ * fail closed instead of attributing tab content it never asked for.
+ */
+async function recordQuestionBinding(normalizedPrompt: string): Promise<SaveResult> {
+  if (!client.state.targetId) {
+    return { ok: false, error: 'No connected target to bind the question to' }
+  }
+  const record: PendingBindingRecord = {
+    schema: PENDING_BINDING_SCHEMA,
+    epoch: SERVER_EPOCH,
+    targetId: client.state.targetId,
+    url: await currentTargetUrl(),
+    questionAnchor: questionAnchor(normalizedPrompt),
+    submittedAt: Date.now(),
+    promptLength: normalizedPrompt.length,
+  }
+  return savePendingBinding(record, client.state.port)
+}
+
+/** Clear both the in-memory binding and its durable record. */
+function clearQuestionBinding(): void {
+  pendingQuestion = null
+  const result = clearPendingBinding(client.state.port)
+  if (!result.ok) logger.warn(`Failed to clear pending binding: ${result.error}`)
+}
+
 function formatTabs(categorized: CategorizedTabs): string {
   const lines: string[] = []
   const categories = [
@@ -380,7 +458,7 @@ export async function startServer(): Promise<void> {
         if (newChat) {
           // Keep the selected target and other browser tabs intact.
           await client.navigate('https://www.perplexity.ai')
-          pendingQuestion = null
+          clearQuestionBinding()
           await sleep(2000)
         }
 
@@ -423,6 +501,10 @@ export async function startServer(): Promise<void> {
           }
           if (state.count > beforeCount && !state.draft.includes(fingerprint)) {
             pendingQuestion = normalizedPrompt
+            const bindingSaved = await recordQuestionBinding(normalizedPrompt)
+            if (!bindingSaved.ok) {
+              logger.warn(`Failed to persist pending binding: ${bindingSaved.error}`)
+            }
             return textResult(
               'Prompt submitted successfully. Use comet_poll to track status or comet_wait to block until completion.',
             )
@@ -446,16 +528,46 @@ export async function startServer(): Promise<void> {
     async () => {
       try {
         await ensureConnected()
-        const raw = await client.safeEvaluate(
-          buildGetAgentStatusScript(activeSelectors, pendingQuestion ?? undefined),
-        )
-        const status = parseAgentStatus(extractValue(raw))
-        if (pendingQuestion && !status.response) {
-          status.status = 'working'
-          status.currentStep =
-            status.bindingError || 'Waiting for this question to receive an answer'
+        const { record, error: loadError } = loadPendingBinding(client.state.port)
+        if (loadError) logger.warn(`Pending binding record unreadable: ${loadError}`)
+        const url = record && record.epoch !== SERVER_EPOCH ? await currentTargetUrl() : null
+        const context = resolveBindingContext({
+          pendingQuestion,
+          record,
+          targetId: client.state.targetId,
+          url,
+        })
+
+        let binding: BindingContext['origin'] = context.origin
+        let status: RawAgentStatus
+        if (context.origin === 'restart_lost') {
+          status = bindingLostStatus(restartLostDiagnostic(context.restartReason, record))
+        } else {
+          const raw = await client.safeEvaluate(
+            buildGetAgentStatusScript(activeSelectors, context.question ?? undefined),
+          )
+          status = parseAgentStatus(extractValue(raw))
+          if (context.origin === 'rebound') {
+            if (status.bindingError) {
+              status = bindingLostStatus(
+                `Rebind validation failed after server restart: ${status.bindingError}`,
+              )
+              binding = 'restart_lost'
+            } else if (!status.response) {
+              status.status = 'working'
+              status.currentStep = 'Waiting for the rebound question to receive an answer'
+            }
+          } else if (context.origin === 'memory' && !status.response) {
+            status.status = 'working'
+            status.currentStep =
+              status.bindingError || 'Waiting for this question to receive an answer'
+          }
         }
-        return textResult(JSON.stringify(status, null, 2))
+
+        const result: Record<string, unknown> = { ...status, binding }
+        if (context.restart) result.restart = context.restart
+        if (context.priorBinding) result.priorBinding = context.priorBinding
+        return textResult(JSON.stringify(result, null, 2))
       } catch (err) {
         return toMcpError(err)
       }
@@ -508,7 +620,7 @@ export async function startServer(): Promise<void> {
   // 6. comet_mode
   server.tool(
     'comet_mode',
-    'Get or switch the current Comet mode. Modes are accessed via "/" slash command in the input field. Available: standard (default), deep-research, model-council, create, learn, review, computer.',
+    'Get or switch the current Comet mode. The mode is read from or switched via the composer mode chip dropdown (safe on the blank home composer). Available: standard (default), deep-research, model-council, create, learn, review, computer.',
     modeShape,
     async ({ mode }) => {
       try {
@@ -520,11 +632,26 @@ export async function startServer(): Promise<void> {
           if (urlMode !== 'standard') {
             return textResult(`Current mode: ${urlMode}`)
           }
-
+          // 2. Non-invasive read of the composer mode chip label.
+          try {
+            const chipRaw = extractValue(await client.safeEvaluate(buildModeChipScript()))
+            const chip = JSON.parse(String(chipRaw)) as {
+              found?: boolean
+              label?: string
+            }
+            if (chip && chip.found && chip.label) {
+              const chipMode = chipLabelToMode(chip.label)
+              if (chipMode) {
+                return textResult(`Current mode: ${chipMode} (composer chip: ${chip.label})`)
+              }
+            }
+          } catch {
+            // fall through to the non-invasive unknown response
+          }
           // A mode query must not navigate or erase an unsent prompt.
           return textResult('Current mode: unknown (non-invasive read is unavailable)')
         }
-        // The slash UI is not project-aware. Never leave a project/conversation or erase a draft.
+        // The mode chip is not project-aware. Never leave a project/conversation or erase a draft.
         const preflightRaw = extractValue(await client.safeEvaluate(buildModePreflightScript()))
         let preflight: { url?: string; hasInput?: boolean; hasDraft?: boolean }
         try {
@@ -548,22 +675,83 @@ export async function startServer(): Promise<void> {
             'Mode switch failed closed: standard mode cannot be confirmed by the current UI',
           )
         }
-        const MAX_MODE_RETRIES = 10
-        for (let attempt = 0; attempt < MAX_MODE_RETRIES; attempt++) {
-          // Lexical ignores CDP char events on some Comet versions.
-          await client.safeEvaluate(
-            `(function() { var input = document.querySelector('#ask-input') || document.querySelector('[contenteditable="true"]'); if (!input) return 'no_input_found'; input.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); document.execCommand('insertText', false, '/'); return input.innerText; })()`,
-          )
-          await sleep(500)
-
-          const raw = await client.safeEvaluate(buildModeSwitchScript(mode))
-          const result = extractValue(raw)
-          if (typeof result === 'string' && result.startsWith('clicked:')) {
-            return textResult(`Mode switch attempted (selection unconfirmed): ${result}`)
+        const MAX_MODE_ATTEMPTS = 3
+        let lastReason = 'unknown failure'
+        let attemptsTried = 0
+        for (let attempt = 1; attempt <= MAX_MODE_ATTEMPTS; attempt++) {
+          attemptsTried = attempt
+          const chipRaw = extractValue(await client.safeEvaluate(buildModeChipScript()))
+          let chip: { found?: boolean; reason?: string; label?: string }
+          try {
+            chip = JSON.parse(String(chipRaw))
+          } catch {
+            lastReason = 'mode chip probe unavailable'
+            break
           }
-          await sleep(300)
+          if (!chip.found) {
+            // No mode chip in the composer UI: the UI is unknown; fail closed
+            // instead of clicking anything else.
+            lastReason = `mode chip not found (${chip.reason || 'no candidate'})`
+            break
+          }
+          if (chipLabelToMode(String(chip.label || '')) === mode) {
+            return textResult(`Mode already active: ${mode} (composer chip: ${chip.label})`)
+          }
+          // Radix triggers only react to a full pointer event sequence;
+          // plain synthetic clicks and CDP mouse events do not open the menu.
+          const openRaw = extractValue(await client.safeEvaluate(buildModeChipClickScript()))
+          let opened: { clicked?: boolean; label?: string }
+          try {
+            opened = JSON.parse(String(openRaw))
+          } catch {
+            lastReason = 'mode chip click probe unavailable'
+            break
+          }
+          if (!opened.clicked) {
+            lastReason = 'mode chip click failed'
+            continue
+          }
+          await sleep(900)
+          const itemRaw = extractValue(
+            await client.safeEvaluate(buildModeMenuItemClickScript(mode)),
+          )
+          let item: { clicked?: boolean; label?: string; role?: string; menuOpen?: boolean }
+          try {
+            item = JSON.parse(String(itemRaw))
+          } catch {
+            lastReason = 'mode menu click probe unavailable'
+            continue
+          }
+          if (!item.clicked) {
+            lastReason = `mode menu did not contain a '${mode}' item`
+            if (item.menuOpen) {
+              // Toggle the trigger to close the stale menu before retrying.
+              await client.safeEvaluate(buildModeChipClickScript())
+            }
+            await sleep(300)
+            continue
+          }
+          await sleep(1100)
+          const confirmRaw = extractValue(await client.safeEvaluate(buildModeChipScript()))
+          let confirmChip: { found?: boolean; label?: string }
+          try {
+            confirmChip = JSON.parse(String(confirmRaw))
+          } catch {
+            lastReason = 'mode chip confirm probe unavailable'
+            continue
+          }
+          if (confirmChip.found && chipLabelToMode(String(confirmChip.label || '')) === mode) {
+            return textResult(
+              `Mode switched and confirmed: ${mode} (composer chip: ${confirmChip.label})`,
+            )
+          }
+          lastReason = `chip label after click: ${
+            confirmChip.found ? confirmChip.label : 'chip missing'
+          }`
         }
-        return textResult('Mode switch failed: typeahead menu did not appear after retries')
+        return textResult(
+          `Mode switch failed: ${lastReason} (${attemptsTried}/${MAX_MODE_ATTEMPTS} attempts)`,
+        )
       } catch (err) {
         return toMcpError(err)
       }
@@ -740,7 +928,7 @@ export async function startServer(): Promise<void> {
           )
         }
         await client.navigateOwnedTarget(targetId, url)
-        pendingQuestion = null
+        clearQuestionBinding()
         return textResult(`Navigated owned target [${targetId}] to: ${url}`)
       } catch (err) {
         return toMcpError(err)
@@ -768,7 +956,7 @@ export async function startServer(): Promise<void> {
           )
         }
         await client.navigate(url)
-        pendingQuestion = null
+        clearQuestionBinding()
         return textResult(`Navigated to: ${url}`)
       } catch (err) {
         return toMcpError(err)
@@ -802,6 +990,21 @@ export async function startServer(): Promise<void> {
     async ({ timeout }) => {
       try {
         await ensureConnected()
+        const { record, error: loadError } = loadPendingBinding(client.state.port)
+        if (loadError) logger.warn(`Pending binding record unreadable: ${loadError}`)
+        const url = record && record.epoch !== SERVER_EPOCH ? await currentTargetUrl() : null
+        const context = resolveBindingContext({
+          pendingQuestion,
+          record,
+          targetId: client.state.targetId,
+          url,
+        })
+        if (context.origin === 'restart_lost') {
+          return textResult(
+            `Binding lost after server restart: ${restartLostDiagnostic(context.restartReason, record)} Fail closed: tab content is not attributed to any pending question.`,
+          )
+        }
+        const boundQuestion = context.question
         const effectiveTimeout = timeout ?? 120000
         const startTime = Date.now()
         let lastResponse = ''
@@ -813,10 +1016,15 @@ export async function startServer(): Promise<void> {
         while (Date.now() - startTime < effectiveTimeout) {
           await sleep(config.pollInterval)
           const statusRaw = await client.safeEvaluate(
-            buildGetAgentStatusScript(activeSelectors, pendingQuestion ?? undefined),
+            buildGetAgentStatusScript(activeSelectors, boundQuestion ?? undefined),
           )
           const status = parseAgentStatus(extractValue(statusRaw))
-          if (pendingQuestion && !status.response) {
+          if (context.origin === 'rebound' && status.bindingError) {
+            return textResult(
+              `Binding lost after server restart: rebind validation failed (${status.bindingError}). Fail closed: tab content is not attributed to the rebound question.`,
+            )
+          }
+          if (boundQuestion && !status.response) {
             lastStatus = status.bindingError || 'Waiting for this question to receive an answer'
             stableSince = 0
             continue

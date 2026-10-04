@@ -4,8 +4,14 @@
  * Strategy: Mock McpServer to capture handler functions during startServer(),
  * then call them directly with controlled CDPClient mocks.
  */
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { vi } from 'vitest'
 import type { CometConfig } from '../../../src/types.js'
+
+// Isolate pending-binding state files from the developer's home directory.
+process.env.MCP_COMET_STATE_DIR = mkdtempSync(join(tmpdir(), 'mcp-comet-test-state-'))
 
 // ---------------------------------------------------------------------------
 // Captured tool handlers (populated by mock McpServer during startServer())

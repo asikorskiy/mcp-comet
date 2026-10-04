@@ -145,13 +145,14 @@ None.
 **Success:**
 ```json
 {
-  "status": "working" | "idle" | "completed",
+  "status": "working" | "idle" | "completed" | "binding_lost",
   "steps": ["step 1", "step 2"],
   "currentStep": "current step text",
   "response": "agent response text so far",
   "hasStopButton": true,
   "hasLoadingSpinner": true,
-  "proseCount": 3
+  "proseCount": 3,
+  "binding": "memory"
 }
 ```
 
@@ -164,6 +165,21 @@ None.
 | `hasStopButton`     | boolean  | Whether the stop/cancel button is visible                  |
 | `hasLoadingSpinner` | boolean  | Whether a loading spinner is visible                       |
 | `proseCount`        | number   | Number of prose elements detected on the page              |
+| `binding`           | string   | Binding provenance: `"memory"`, `"rebound"`, `"unbound"`, or `"restart_lost"` |
+| `restart`           | object   | Restart provenance when a prior binding applies to this tab (see below) |
+| `priorBinding`      | object   | Restart record for a different tab; informational only (see below) |
+
+### Restart provenance and rebinding
+
+`comet_ask` binds the submitted question to the connected tab in server memory. When the MCP server process restarts (for example when the MCP client reconnects), that memory is gone. To prevent silently attributing tab content that this process never asked for, the binding is also persisted to a local state file (`$MCP_COMET_STATE_DIR/pending-<port>.json`, default `~/.mcp-comet/`) containing only the server epoch, target id, tab URL, and a 64-character normalized question anchor — never the full prompt text.
+
+On `comet_poll`/`comet_wait`, a record written by a different server epoch proves a restart:
+
+- **Same target and same URL** — the standard question-anchor validation runs against the persisted anchor. On success the poll returns `binding: "rebound"` with `restart` provenance and the validated response. On failure (the anchor is no longer the latest turn) it fails closed: `binding: "restart_lost"`, `status: "binding_lost"`, empty `response`.
+- **URL changed or unavailable** — fails closed without attribution: `binding: "restart_lost"`, `status: "binding_lost"`, suppressed `response`.
+- **Different tab** — the poll stays a plain unbound observation (`binding: "unbound"`) with `priorBinding` provenance; unrelated tabs are never failed closed.
+
+The `restart`/`priorBinding` object contains `previousEpoch`, `currentEpoch`, `submittedAt`, `recordedTargetId`, and `recordedUrl`. The question is never re-asked automatically. Set `MCP_COMET_STATE_DIR` to isolate or relocate the state file.
 
 ### CLI Example
 

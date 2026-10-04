@@ -52,12 +52,29 @@ describe('UI control tool handlers', () => {
       expect(result.content[0].text).toContain('Current mode: computer')
     })
 
-    it('does not mutate the draft while querying an uncertain mode', async () => {
+    it('returns current mode from the composer chip label', async () => {
       mocks.safeEvaluate
-        // 1st call: URL-based check returns 'standard' → enters typeahead flow
         .mockResolvedValueOnce({ result: { value: 'standard' } })
-        // 2nd-11th calls: focus + readActiveMode (5 attempts × 2 calls each)
-        .mockResolvedValue({ result: { value: 'standard' } })
+        .mockResolvedValueOnce({
+          result: {
+            value: JSON.stringify({
+              found: true,
+              x: 626,
+              y: 449,
+              label: 'Deep research',
+              icx: 924,
+              icy: 445,
+            }),
+          },
+        })
+      const result = await getHandler('comet_mode')({})
+
+      expect(result.content[0].text).toContain('Current mode: deep-research')
+      expect(result.content[0].text).toContain('composer chip: Deep research')
+    })
+
+    it('does not mutate the draft while querying an uncertain mode', async () => {
+      mocks.safeEvaluate.mockResolvedValue({ result: { value: 'standard' } })
       const handler = getHandler('comet_mode')
       const result = await handler({})
 
@@ -104,75 +121,164 @@ describe('UI control tool handlers', () => {
       expect(mocks.navigate).not.toHaveBeenCalled()
     })
 
-    it('switches mode and returns result', async () => {
-      mocks.safeEvaluate.mockResolvedValueOnce({
-        result: {
-          value: JSON.stringify({
-            url: 'https://www.perplexity.ai/',
-            hasInput: true,
-            hasDraft: false,
-          }),
-        },
-      })
-      mocks.safeEvaluate.mockResolvedValue({ result: { value: 'clicked:#pplx-icon-telescope' } })
-      const handler = getHandler('comet_mode')
-      const result = await handler({ mode: 'deep-research' })
+    it('switches mode via pointer sequence and confirms via the chip label', async () => {
+      const chip = { found: true, x: 626, y: 449, label: 'Search', icx: 924, icy: 445 }
+      mocks.safeEvaluate
+        .mockResolvedValueOnce({
+          result: {
+            value: JSON.stringify({
+              url: 'https://www.perplexity.ai/',
+              hasInput: true,
+              hasDraft: false,
+            }),
+          },
+        })
+        .mockResolvedValueOnce({ result: { value: JSON.stringify(chip) } })
+        .mockResolvedValueOnce({
+          result: { value: JSON.stringify({ clicked: true, label: 'Search' }) },
+        })
+        .mockResolvedValueOnce({
+          result: {
+            value: JSON.stringify({ clicked: true, label: 'Deep research', role: 'menuitemradio' }),
+          },
+        })
+        .mockResolvedValueOnce({
+          result: { value: JSON.stringify({ ...chip, label: 'Deep research' }) },
+        })
+      const result = await getHandler('comet_mode')({ mode: 'deep-research' })
 
-      expect(result.content[0].type).toBe('text')
-      expect(result.content[0].text).toContain('selection unconfirmed')
+      expect(result.content[0].text).toContain('Mode switched and confirmed: deep-research')
       expect(mocks.navigate).not.toHaveBeenCalled()
-      expect(result.content[0].text).toContain('clicked:#pplx-icon-telescope')
     })
 
-    it('retries mode switch when listbox not immediately available', async () => {
-      mocks.safeEvaluate.mockReset()
-      mocks.pressKey.mockClear()
-      // Each retry attempt calls safeEvaluate twice (focus + mode switch)
-      mocks.safeEvaluate.mockResolvedValueOnce({
-        result: {
-          value: JSON.stringify({
-            url: 'https://www.perplexity.ai/',
-            hasInput: true,
-            hasDraft: false,
-          }),
-        },
-      })
-      // Attempt 1: focus(default) + mode(no_listbox_found)
-      // Attempt 2: focus(default) + mode(no_listbox_found)
-      // Attempt 3: focus(default) + mode(clicked)
+    it('returns early when the requested mode is already active', async () => {
       mocks.safeEvaluate
-        .mockResolvedValueOnce({ result: { value: undefined } })
-        .mockResolvedValueOnce({ result: { value: 'no_listbox_found' } })
-        .mockResolvedValueOnce({ result: { value: undefined } })
-        .mockResolvedValueOnce({ result: { value: 'no_listbox_found' } })
-        .mockResolvedValueOnce({ result: { value: undefined } })
-        .mockResolvedValueOnce({ result: { value: 'clicked:#pplx-icon-telescope' } })
-      const handler = getHandler('comet_mode')
-      const result = await handler({ mode: 'deep-research' })
+        .mockResolvedValueOnce({
+          result: {
+            value: JSON.stringify({
+              url: 'https://www.perplexity.ai/',
+              hasInput: true,
+              hasDraft: false,
+            }),
+          },
+        })
+        .mockResolvedValueOnce({
+          result: {
+            value: JSON.stringify({
+              found: true,
+              x: 626,
+              y: 449,
+              label: 'Deep research',
+              icx: 924,
+              icy: 445,
+            }),
+          },
+        })
+      const result = await getHandler('comet_mode')({ mode: 'deep-research' })
 
-      expect(result.content[0].text).toContain('clicked:#pplx-icon-telescope')
-      expect(mocks.safeEvaluate).toHaveBeenCalledTimes(7)
-    }, 10000)
+      expect(result.content[0].text).toContain('Mode already active: deep-research')
+    })
 
-    it('returns failure after max retries when listbox never appears', async () => {
-      mocks.safeEvaluate.mockReset()
-      mocks.safeEvaluate.mockResolvedValueOnce({
-        result: {
-          value: JSON.stringify({
-            url: 'https://www.perplexity.ai/',
-            hasInput: true,
-            hasDraft: false,
-          }),
-        },
-      })
-      mocks.safeEvaluate.mockResolvedValue({ result: { value: 'no_listbox_found' } })
-      const handler = getHandler('comet_mode')
-      const result = await handler({ mode: 'deep-research' })
+    it('fails closed when the composer has no mode chip', async () => {
+      mocks.safeEvaluate
+        .mockResolvedValueOnce({
+          result: {
+            value: JSON.stringify({
+              url: 'https://www.perplexity.ai/',
+              hasInput: true,
+              hasDraft: false,
+            }),
+          },
+        })
+        .mockResolvedValue({
+          result: { value: JSON.stringify({ found: false, reason: 'mode_chip_not_found' }) },
+        })
+      const result = await getHandler('comet_mode')({ mode: 'deep-research' })
 
       expect(result.content[0].text).toContain('Mode switch failed')
-      // 10 retries × 2 safeEvaluate calls each = 20
-      expect(mocks.safeEvaluate).toHaveBeenCalledTimes(21)
+      expect(result.content[0].text).toContain('mode chip not found')
+    })
+
+    it('reports the precise blocker when the chip click fails', async () => {
+      const preflight = {
+        result: {
+          value: JSON.stringify({
+            url: 'https://www.perplexity.ai/',
+            hasInput: true,
+            hasDraft: false,
+          }),
+        },
+      }
+      const chip = {
+        result: {
+          value: JSON.stringify({
+            found: true,
+            x: 626,
+            y: 449,
+            label: 'Search',
+            icx: 924,
+            icy: 445,
+          }),
+        },
+      }
+      const clickFailed = { result: { value: JSON.stringify({ clicked: false }) } }
+      mocks.safeEvaluate
+        .mockResolvedValueOnce(preflight)
+        .mockResolvedValueOnce(chip)
+        .mockResolvedValueOnce(clickFailed)
+        .mockResolvedValueOnce(chip)
+        .mockResolvedValueOnce(clickFailed)
+        .mockResolvedValueOnce(chip)
+        .mockResolvedValueOnce(clickFailed)
+      const result = await getHandler('comet_mode')({ mode: 'deep-research' })
+
+      expect(result.content[0].text).toContain('Mode switch failed')
+      expect(result.content[0].text).toContain('mode chip click failed')
     }, 15000)
+
+    it('reports the precise blocker when the menu lacks the mode item', async () => {
+      const preflight = {
+        result: {
+          value: JSON.stringify({
+            url: 'https://www.perplexity.ai/',
+            hasInput: true,
+            hasDraft: false,
+          }),
+        },
+      }
+      const chip = {
+        result: {
+          value: JSON.stringify({
+            found: true,
+            x: 626,
+            y: 449,
+            label: 'Search',
+            icx: 924,
+            icy: 445,
+          }),
+        },
+      }
+      const chipClick = { result: { value: JSON.stringify({ clicked: true, label: 'Search' }) } }
+      const missing = { result: { value: JSON.stringify({ clicked: false, menuOpen: true }) } }
+      mocks.safeEvaluate
+        .mockResolvedValueOnce(preflight)
+        .mockResolvedValueOnce(chip)
+        .mockResolvedValueOnce(chipClick)
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(chipClick)
+        .mockResolvedValueOnce(chip)
+        .mockResolvedValueOnce(chipClick)
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(chipClick)
+        .mockResolvedValueOnce(chip)
+        .mockResolvedValueOnce(chipClick)
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValueOnce(chipClick)
+      const result = await getHandler('comet_mode')({ mode: 'deep-research' })
+
+      expect(result.content[0].text).toContain('Mode switch failed')
+      expect(result.content[0].text).toContain("mode menu did not contain a 'deep-research' item")
+    }, 20000)
 
     it('returns error response when safeEvaluate fails', async () => {
       mocks.safeEvaluate.mockRejectedValue(new Error('Evaluate failed'))

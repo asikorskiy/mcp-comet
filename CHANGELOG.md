@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Restart provenance for pending questions:** `comet_poll`/`comet_wait` no longer attribute a tab's latest answer after an MCP server restart. The pending-question binding is persisted (server epoch, target id, tab URL, 64-char normalized question anchor — never the full prompt) and a post-restart poll either rebinds with explicit validation (`binding: "rebound"` plus `restart` provenance) or fails closed (`status: "binding_lost"`, suppressed response). Unrelated tabs remain unbound observations with `priorBinding` provenance only. Questions are never re-asked automatically.
+
 ## [1.1.5] - 2026-04-15
 
 ### Fixed
