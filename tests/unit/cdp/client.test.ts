@@ -7,6 +7,14 @@ vi.mock('chrome-remote-interface', () => ({
   default: vi.fn(),
 }))
 
+vi.mock('../../../src/cdp/browser.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/cdp/browser.js')>()),
+  getCometPath: vi.fn().mockReturnValue('/fake/Comet'),
+  isCometProcessRunning: vi.fn().mockReturnValue(true),
+  killComet: vi.fn(),
+  startCometProcess: vi.fn(),
+}))
+
 function mockCRI(overrides = {}) {
   const mock = {
     Page: {
@@ -103,6 +111,36 @@ describe('CDPClient connect()', () => {
     expect(criMock.Runtime.enable).toHaveBeenCalled()
     expect(client.state.connected).toBe(true)
     expect(client.state.targetId).toBe('t1')
+  })
+
+  it('enables focus emulation so a background tab renders the full answer', async () => {
+    originalFetch = mockFetchForConnect()
+    const setFocusEmulationEnabled = vi.fn().mockResolvedValue({})
+    mockCRI({
+      Emulation: {
+        setDeviceMetricsOverride: vi.fn().mockRejectedValue('ignore'),
+        setFocusEmulationEnabled,
+      },
+    })
+
+    await CDPClient.getInstance().connect()
+
+    expect(setFocusEmulationEnabled).toHaveBeenCalledWith({ enabled: true })
+  })
+
+  it('still connects when focus emulation is unsupported', async () => {
+    originalFetch = mockFetchForConnect()
+    mockCRI({
+      Emulation: {
+        setDeviceMetricsOverride: vi.fn().mockRejectedValue('ignore'),
+        setFocusEmulationEnabled: vi.fn().mockRejectedValue(new Error('not supported')),
+      },
+    })
+
+    const client = CDPClient.getInstance()
+    await client.connect()
+
+    expect(client.state.connected).toBe(true)
   })
 
   it('throws CDPConnectionError when no targets available', async () => {
@@ -448,6 +486,32 @@ describe('CDPClient reconnect race condition', () => {
     await Promise.all([client.reconnect(), client.reconnect()])
     // Should only reconnect once, not twice
     expect(connectCalls).toBeLessThanOrEqual(3) // initial + at most 1 reconnect
+  })
+})
+
+describe('CDPClient launchOrConnect()', () => {
+  let originalFetch: typeof globalThis.fetch
+
+  beforeEach(() => {
+    CDPClient.resetInstance()
+    originalFetch = globalThis.fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    vi.clearAllMocks()
+  })
+
+  it('never kills or relaunches a running browser when attach fails', async () => {
+    const browser = await import('../../../src/cdp/browser.js')
+    vi.mocked(browser.isCometProcessRunning).mockReturnValue(true)
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('socket closed'))
+
+    await expect(CDPClient.getInstance().launchOrConnect()).rejects.toThrow(
+      'refusing to restart the browser',
+    )
+    expect(browser.killComet).not.toHaveBeenCalled()
+    expect(browser.startCometProcess).not.toHaveBeenCalled()
   })
 })
 

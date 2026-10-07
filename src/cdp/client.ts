@@ -3,7 +3,7 @@ import { loadConfig } from '../config.js'
 import { CDPConnectionError, CometLaunchError, EvaluationError } from '../errors.js'
 import { createLogger, type Logger } from '../logger.js'
 import type { CategorizedTabs, CometConfig, EvaluateResult, TabInfo } from '../types.js'
-import { getCometPath, httpGet, killComet, startCometProcess } from './browser.js'
+import { getCometPath, httpGet, isCometProcessRunning, startCometProcess } from './browser.js'
 import { getBackoffDelay, isConnectionError } from './connection.js'
 import { categorizeTabs } from './tabs.js'
 
@@ -100,6 +100,14 @@ export class CDPClient {
         })
       } catch {
         this.logger.debug('Could not set viewport metrics')
+      }
+
+      // A background (hidden) tab stalls Perplexity's answer rendering mid-sentence;
+      // focus emulation makes the page report visible so the answer renders to the end.
+      try {
+        await this.criClient.Emulation.setFocusEmulationEnabled({ enabled: true })
+      } catch {
+        this.logger.debug('Could not enable focus emulation')
       }
 
       this.state.connected = true
@@ -391,9 +399,16 @@ export class CDPClient {
       }
     }
 
+    // A failed attach is not proof that Comet is down. Never kill a running browser:
+    // that destroys the owner's session and every other agent's tabs.
+    if (isCometProcessRunning()) {
+      throw new CDPConnectionError(
+        'Comet is running but CDP attach failed; refusing to restart the browser',
+      )
+    }
+
     // Not running — launch a new instance
     const cometPath = getCometPath()
-    killComet()
     startCometProcess(cometPath, p, this.logger, this.config.userDataDir)
 
     // Give Comet time to start the debugging port
