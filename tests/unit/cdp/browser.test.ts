@@ -120,9 +120,20 @@ describe('isCometProcessRunning', () => {
 
 describe('killComet', () => {
   it('does not throw on failure', async () => {
+    // Never run the real pkill here: it terminates the developer's live Comet browser.
+    const childProcess = await import('node:child_process')
+    const execSyncMock = vi.fn().mockImplementation(() => {
+      throw new Error('no process found')
+    })
+    vi.doMock('node:child_process', () => ({ ...childProcess, execSync: execSyncMock }))
+    vi.resetModules()
+
     const { killComet } = await import('../../../src/cdp/browser.js')
-    // This should not throw even if no Comet process exists
     expect(() => killComet()).not.toThrow()
+    expect(execSyncMock).toHaveBeenCalledTimes(1)
+
+    vi.doUnmock('node:child_process')
+    vi.resetModules()
   })
 })
 

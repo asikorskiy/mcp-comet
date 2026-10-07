@@ -651,7 +651,8 @@ export async function startServer(): Promise<void> {
           // A mode query must not navigate or erase an unsent prompt.
           return textResult('Current mode: unknown (non-invasive read is unavailable)')
         }
-        // The mode chip is not project-aware. Never leave a project/conversation or erase a draft.
+        // The chip dropdown switches mode in place, so a blank project composer is as safe as
+        // home and keeps the project instructions. Never touch a conversation or erase a draft.
         const preflightRaw = extractValue(await client.safeEvaluate(buildModePreflightScript()))
         let preflight: { url?: string; hasInput?: boolean; hasDraft?: boolean }
         try {
@@ -659,12 +660,13 @@ export async function startServer(): Promise<void> {
         } catch {
           return textResult('Mode switch failed closed: browser preflight unavailable')
         }
-        if (
-          preflight.url !== 'https://www.perplexity.ai/' &&
-          preflight.url !== 'https://www.perplexity.ai'
-        ) {
+        const pageUrl = String(preflight.url ?? '')
+        const isHome =
+          pageUrl === 'https://www.perplexity.ai/' || pageUrl === 'https://www.perplexity.ai'
+        const isProjectHome = /^https:\/\/www\.perplexity\.ai\/projects\/[^/?#]+\/?$/.test(pageUrl)
+        if (!isHome && !isProjectHome) {
           return textResult(
-            'Mode switch failed closed: project/conversation mode cannot be safely selected without leaving context',
+            'Mode switch failed closed: conversation mode cannot be safely selected without leaving context',
           )
         }
         if (!preflight.hasInput || preflight.hasDraft) {

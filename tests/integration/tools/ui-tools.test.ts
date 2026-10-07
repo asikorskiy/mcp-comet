@@ -84,7 +84,22 @@ describe('UI control tool handlers', () => {
       expect(mocks.typeChar).not.toHaveBeenCalled()
     }, 15000)
 
-    it('fails closed inside a project without navigating or clearing a draft', async () => {
+    it('fails closed inside a conversation without navigating or clearing a draft', async () => {
+      mocks.safeEvaluate.mockResolvedValue({
+        result: {
+          value: JSON.stringify({
+            url: 'https://www.perplexity.ai/search/conversation-id',
+            hasInput: true,
+            hasDraft: false,
+          }),
+        },
+      })
+      const result = await getHandler('comet_mode')({ mode: 'deep-research' })
+      expect(result.content[0].text).toContain('conversation mode cannot be safely selected')
+      expect(mocks.navigate).not.toHaveBeenCalled()
+    })
+
+    it('fails closed on a project page that holds an unsent draft', async () => {
       mocks.safeEvaluate.mockResolvedValue({
         result: {
           value: JSON.stringify({
@@ -95,9 +110,37 @@ describe('UI control tool handlers', () => {
         },
       })
       const result = await getHandler('comet_mode')({ mode: 'deep-research' })
-      expect(result.content[0].text).toContain(
-        'project/conversation mode cannot be safely selected',
-      )
+      expect(result.content[0].text).toContain('unsent draft')
+      expect(mocks.navigate).not.toHaveBeenCalled()
+    })
+
+    it('switches mode in place on a blank project composer', async () => {
+      const chip = { found: true, x: 626, y: 449, label: 'Search', icx: 924, icy: 445 }
+      mocks.safeEvaluate
+        .mockResolvedValueOnce({
+          result: {
+            value: JSON.stringify({
+              url: 'https://www.perplexity.ai/projects/project-id',
+              hasInput: true,
+              hasDraft: false,
+            }),
+          },
+        })
+        .mockResolvedValueOnce({ result: { value: JSON.stringify(chip) } })
+        .mockResolvedValueOnce({
+          result: { value: JSON.stringify({ clicked: true, label: 'Search' }) },
+        })
+        .mockResolvedValueOnce({
+          result: {
+            value: JSON.stringify({ clicked: true, label: 'Deep research', role: 'menuitemradio' }),
+          },
+        })
+        .mockResolvedValueOnce({
+          result: { value: JSON.stringify({ ...chip, label: 'Deep research' }) },
+        })
+      const result = await getHandler('comet_mode')({ mode: 'deep-research' })
+
+      expect(result.content[0].text).toContain('Mode switched and confirmed: deep-research')
       expect(mocks.navigate).not.toHaveBeenCalled()
     })
 

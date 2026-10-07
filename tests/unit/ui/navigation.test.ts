@@ -235,6 +235,19 @@ describe('buildModeChipScript', () => {
     expect(chip.icy).toBe(445)
   })
 
+  it('skips a sidebar button that shares the composer row on project pages', () => {
+    const doc = {
+      querySelector: (sel) => (sel === '#ask-input' ? input : null),
+      querySelectorAll: () => [
+        makeEl({}, 'asikorskiyPro', { x: 16, y: 470, width: 180, height: 40 }),
+        makeEl({}, 'Search', { x: 640, y: 445, width: 92, height: 40 }),
+      ],
+    }
+    const chip = JSON.parse(Function('document', `return ${buildModeChipScript()}`)(doc))
+    expect(chip.found).toBe(true)
+    expect(chip.label).toBe('Search')
+  })
+
   it('skips labeled, popup, empty, and misaligned buttons', () => {
     const doc = {
       querySelector: (sel) => (sel === '#ask-input' ? input : null),

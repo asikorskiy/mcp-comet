@@ -163,8 +163,9 @@ export function chipLabelToMode(label: string): string | null {
 /**
  * Build script to locate the composer mode chip dropdown trigger and the
  * composer input center. The chip is the first visible, unlabeled text
- * button vertically aligned with the composer input (labeled buttons such
- * as "Add files or tools", the model selector, and submit are excluded).
+ * button vertically aligned with the composer input and inside its horizontal
+ * span (labeled buttons such as "Add files or tools", the model selector,
+ * submit, and sidebar buttons are excluded).
  */
 export function buildModeChipScript(): string {
   return `(function() {
@@ -183,6 +184,9 @@ export function buildModeChipScript(): string {
       if (r.width <= 0 || r.height <= 0) continue;
       var cy = r.y + r.height / 2;
       if (Math.abs(cy - icy) > 80) continue;
+      // Sidebar buttons (e.g. the account switcher on project pages) share the row height.
+      var cx = r.x + r.width / 2;
+      if (cx < ir.x - 60 || cx > ir.x + ir.width + 60) continue;
       return JSON.stringify({
         found: true,
         x: Math.round(r.x + r.width / 2),
@@ -270,6 +274,8 @@ export function buildModeChipClickScript(): string {
       var r = b.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) continue;
       if (Math.abs(r.y + r.height / 2 - icy) > 80) continue;
+      var cx = r.x + r.width / 2;
+      if (cx < ir.x - 60 || cx > ir.x + ir.width + 60) continue;
       var opts = { bubbles: true, cancelable: true, composed: true, pointerId: 1, isPrimary: true, button: 0, buttons: 1, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
       b.dispatchEvent(new PointerEvent('pointerdown', opts));
       b.dispatchEvent(new MouseEvent('mousedown', opts));
